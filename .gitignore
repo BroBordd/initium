@@ -1,0 +1,13 @@
+# Build outputs
+build/
+init
+
+# Target migration script
+migrate.sh
+
+# Temporary & editor swap files
+*.o
+*.d
+*.swp
+*~
+.DS_Store
