@@ -36,6 +36,10 @@ void input_loop(void)
     struct timespec last_scan;
     last_scan = last_wd_kick;
 
+    /* Absolute frame schedule for real 60 FPS pacing (see poll() call
+     * below). Starts "due" immediately so the first frame doesn't wait. */
+    struct timespec next_frame = last_wd_kick;
+
     dbgf(LOGPFX "input loop active (60 FPS + Dynamic Hotplug)\n");
 
     /* Perf instrumentation: split total loop-iteration time into
@@ -80,8 +84,24 @@ void input_loop(void)
             last_scan = t_start;
         }
 
-        /* 16ms poll to cap at ~60fps */
-        poll(pfds, (nfds_t)num_pfds, 16);
+        /* Frame pacing: block only for whatever's left of THIS frame's
+         * budget (FRAME_TIME_NS), not a flat 16ms on top of however long
+         * the previous render took. The old code waited a fixed 16ms here
+         * regardless of render cost, so the real loop period was
+         * (16ms + render time) every frame -- e.g. ~33ms/~30fps for the
+         * heavier 3D bench render. It only ever hit ~60fps by accident
+         * while touching, because poll() returns immediately once the
+         * touch fd has pending data, incidentally cancelling the wasted
+         * wait. Scheduling against an absolute next-frame time fixes that
+         * for every view, touch or not. */
+        long remain_ns = (next_frame.tv_sec - t_start.tv_sec) * 1000000000L +
+                          (next_frame.tv_nsec - t_start.tv_nsec);
+        int timeout_ms = (int)(remain_ns / 1000000L);
+        if (timeout_ms < 0) timeout_ms = 0;
+        if (timeout_ms > (int)(FRAME_TIME_NS / 1000000L))
+            timeout_ms = (int)(FRAME_TIME_NS / 1000000L);
+
+        poll(pfds, (nfds_t)num_pfds, timeout_ms);
 
         struct input_event ev;
 
@@ -183,6 +203,19 @@ void input_loop(void)
             gpu_kick_keepalive();
             last_wd_kick = now;
         }
+
+        /* Advance the frame schedule by exactly one budget-slice. If a
+         * frame ran long and we're already past the next slot, resync to
+         * "now" instead of firing off several back-to-back catch-up
+         * frames -- we want a steady 60fps, not a burst after a hitch. */
+        next_frame.tv_nsec += FRAME_TIME_NS;
+        while (next_frame.tv_nsec >= 1000000000L) {
+            next_frame.tv_nsec -= 1000000000L;
+            next_frame.tv_sec++;
+        }
+        long behind_ns = (now.tv_sec - next_frame.tv_sec) * 1000000000L +
+                          (now.tv_nsec - next_frame.tv_nsec);
+        if (behind_ns > 0) next_frame = now;
     }
 
     if (fd_gpio >= 0)  close(fd_gpio);

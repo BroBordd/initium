@@ -60,7 +60,7 @@ static void draw_triangle_2d(int x0, int y0, int x1, int y1, int x2, int y2, uns
 {
     int min_x = x0 < x1 ? (x0 < x2 ? x0 : x2) : (x1 < x2 ? x1 : x2);
     int max_x = x0 > x1 ? (x0 > x2 ? x0 : x2) : (x1 > x2 ? x1 : x2);
-    int min_y = y0 < y1 ? (y0 < y2 ? y0 : y2) : (y1 > y2 ? y1 : y2);
+    int min_y = y0 < y1 ? (y0 < y2 ? y0 : y2) : (y1 < y2 ? y1 : y2);
     int max_y = y0 > y1 ? (y0 > y2 ? y0 : y2) : (y1 > y2 ? y1 : y2);
 
     if (min_x < 0) min_x = 0;
