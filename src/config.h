@@ -1,7 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define BUILD_VERSION           "17.0-AOSP"
+#define BUILD_VERSION           "18.0-Initium"
 #define LOGPFX                  "[INIT_v" BUILD_VERSION "] "
 
 /* Display Geometry */
@@ -12,7 +12,7 @@
 #define NOTCH_OFFSET_Y          140
 #define UI_PADDING_X            36
 
-#define STATUS_BAR_HEIGHT       54
+#define STATUS_BAR_HEIGHT       76
 #define NAV_BAR_HEIGHT          96
 
 /* Touch Slop: pixels of movement before converting a tap into a scroll */
@@ -45,9 +45,6 @@
 #define BUTTON_HEIGHT           120
 #define BUTTON_GAP              16
 
-/* Vector Assets */
-#define VECTOR_ICONS_DIR        "/system/res/icons"
-
 /* Hardware Watchdog & Power */
 #define EVENT_PATH_GPIO_KEYS    "/dev/input/event0"
 #define EVENT_PATH_POWER_KEY    "/dev/input/event1"
@@ -62,11 +59,11 @@
 #define VIBRATOR_ENABLE_PATH    "/sys/class/timed_output/vibrator/enable"
 #define VIBRATOR_PULSE_LEN      "100\n"
 
-/* Colors */
+/* Colors - Cyan Palette */
 #define COLOR_CANVAS            0x090D16
 #define COLOR_STATUSBAR_BG      0x0E1422
 #define COLOR_TOPBAR_BG         0x131B2E
-#define COLOR_TOPBAR_ACCENT     0x2563EB
+#define COLOR_TOPBAR_ACCENT     0x06B6D4
 #define COLOR_TITLE_TXT         0xFFFFFF
 #define COLOR_SUBTITLE_TXT      0x94A3B8
 
@@ -74,8 +71,8 @@
 #define COLOR_CARD_BORDER       0x2B3954
 #define COLOR_CARD_TXT          0xF8FAFC
 
-#define COLOR_CARD_SEL_BG       0x1D4ED8
-#define COLOR_CARD_SEL_BORDER   0x60A5FA
+#define COLOR_CARD_SEL_BG       0x0891B2
+#define COLOR_CARD_SEL_BORDER   0x22D3EE
 #define COLOR_CARD_SEL_TXT      0xFFFFFF
 
 #define COLOR_CARD_EXIT_BG      0x381820
@@ -84,11 +81,11 @@
 #define COLOR_NAVBAR_BG         0x0E1422
 #define COLOR_FOOTER_BG         0x0E1422
 #define COLOR_NAVBAR_BORDER     0x1E293B
-#define COLOR_NAVBAR_ICON       0x60A5FA
+#define COLOR_NAVBAR_ICON       0x22D3EE
 #define COLOR_NAVBAR_ICON_DIM   0x475569
 
-#define COLOR_ACCENT_BLUE       0x3B82F6
-#define COLOR_CHECK_ON          0x38BDF8
+#define COLOR_ACCENT_BLUE       0x06B6D4
+#define COLOR_CHECK_ON          0x06B6D4
 #define COLOR_CHECK_OFF         0x475569
 #define COLOR_STATUS_OK         0x34D399
 #define COLOR_HEARTBEAT_OK      COLOR_STATUS_OK
@@ -99,6 +96,6 @@
 #define COLOR_KB_KEY_BG         0x1E293B
 #define COLOR_KB_KEY_BORDER     0x334155
 #define COLOR_KB_KEY_TXT        0xF8FAFC
-#define COLOR_KB_SPEC_BG        0x2563EB
+#define COLOR_KB_SPEC_BG        0x0891B2
 
 #endif

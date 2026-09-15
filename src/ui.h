@@ -1,4 +1,3 @@
-/* src/ui.h */
 #ifndef UI_H
 #define UI_H
 
@@ -8,8 +7,10 @@ typedef enum {
     VIEW_FILEMANAGER,
     VIEW_TERMINAL,
     VIEW_SYSMON,
+    VIEW_PROCESSES,
     VIEW_RECENTS,
-    VIEW_BENCH3D
+    VIEW_BENCH3D,
+    VIEW_POWER
 } current_view_t;
 
 void ui_init(void);
@@ -24,5 +25,8 @@ void ui_on_power_key(void);
 void ui_return_to_home(void);
 int  ui_is_exit_requested(void);
 current_view_t ui_get_current_view(void);
+
+void ui_show_toast(const char *msg);
+void ui_show_alert(const char *title, const char *msg);
 
 #endif

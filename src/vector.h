@@ -1,4 +1,3 @@
-/* src/vector.h */
 #ifndef VECTOR_H
 #define VECTOR_H
 
@@ -14,7 +13,8 @@ typedef enum {
     VEC_ICON_3D,
     VEC_ICON_STORAGE,
     VEC_ICON_SENSOR,
-    VEC_ICON_POWER
+    VEC_ICON_POWER,
+    VEC_ICON_PROCESSES
 } vector_icon_t;
 
 void vector_init(void);

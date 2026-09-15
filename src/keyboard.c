@@ -1,4 +1,3 @@
-/* src/keyboard.c */
 #include <string.h>
 #include <stdio.h>
 #include "keyboard.h"
@@ -62,7 +61,7 @@ void kb_render(void)
     if (!g_kb_visible) return;
 
     int kb_h = kb_get_height();
-    int start_y = g_fb.yres - kb_h;
+    int start_y = g_fb.yres - NAV_BAR_HEIGHT - kb_h;
 
     fb_fill_rect(0, start_y, g_fb.xres, kb_h, COLOR_KB_BG);
     fb_fill_rect(0, start_y, g_fb.xres, 4, COLOR_TOPBAR_ACCENT);
@@ -78,7 +77,6 @@ void kb_render(void)
     int row_h = 72;
     int gap = 8;
 
-    /* Row 0 */
     int cols = 12;
     int kw = (g_fb.xres - 40 - (cols - 1) * gap) / cols;
     for (int i = 0; i < cols; i++) {
@@ -87,10 +85,7 @@ void kb_render(void)
         font_draw_text(kx + (kw / 2) - 8, key_area_y + 20, ROW0[i], FONT_SIZE_KB, COLOR_KB_KEY_TXT);
     }
 
-    /* Row 1 */
     key_area_y += row_h + gap;
-    cols = 12;
-    kw = (g_fb.xres - 40 - (cols - 1) * gap) / cols;
     for (int i = 0; i < cols; i++) {
         int kx = 20 + i * (kw + gap);
         char letter[2] = { ROW1[i][0], '\0' };
@@ -100,7 +95,6 @@ void kb_render(void)
         font_draw_text(kx + (kw / 2) - 8, key_area_y + 20, letter, FONT_SIZE_KB, COLOR_KB_KEY_TXT);
     }
 
-    /* Row 2 */
     key_area_y += row_h + gap;
     cols = 11;
     kw = (g_fb.xres - 40 - (cols - 1) * gap) / cols;
@@ -113,7 +107,6 @@ void kb_render(void)
         font_draw_text(kx + (kw / 2) - 8, key_area_y + 20, letter, FONT_SIZE_KB, COLOR_KB_KEY_TXT);
     }
 
-    /* Row 3 */
     key_area_y += row_h + gap;
     int shift_w = 120;
     int bksp_w = 140;
@@ -139,7 +132,6 @@ void kb_render(void)
     fb_draw_card(cur_x, key_area_y, bksp_w, row_h, COLOR_CARD_EXIT_BG, COLOR_CARD_EXIT_BORDER);
     font_draw_text(cur_x + 24, key_area_y + 20, "BKSP", FONT_SIZE_SMALL, COLOR_TITLE_TXT);
 
-    /* Row 4 */
     key_area_y += row_h + gap;
     int hide_w = 140;
     int enter_w = 180;
@@ -163,16 +155,14 @@ int kb_handle_touch(int x, int y, int is_down)
     if (!g_kb_visible || !is_down) return 0;
 
     int kb_h = kb_get_height();
-    int start_y = g_fb.yres - kb_h;
+    int start_y = g_fb.yres - NAV_BAR_HEIGHT - kb_h;
     if (y < start_y) return 0;
 
     trigger_vibration();
-
     int key_area_y = start_y + 80;
     int row_h = 72;
     int gap = 8;
 
-    /* Row 0 */
     if (y >= key_area_y && y < key_area_y + row_h) {
         int cols = 12;
         int kw = (g_fb.xres - 40 - (cols - 1) * gap) / cols;
@@ -187,7 +177,6 @@ int kb_handle_touch(int x, int y, int is_down)
         return 1;
     }
 
-    /* Row 1 */
     key_area_y += row_h + gap;
     if (y >= key_area_y && y < key_area_y + row_h) {
         int cols = 12;
@@ -205,7 +194,6 @@ int kb_handle_touch(int x, int y, int is_down)
         return 1;
     }
 
-    /* Row 2 */
     key_area_y += row_h + gap;
     if (y >= key_area_y && y < key_area_y + row_h) {
         int cols = 11;
@@ -223,7 +211,6 @@ int kb_handle_touch(int x, int y, int is_down)
         return 1;
     }
 
-    /* Row 3 */
     key_area_y += row_h + gap;
     if (y >= key_area_y && y < key_area_y + row_h) {
         int shift_w = 120;
@@ -259,7 +246,6 @@ int kb_handle_touch(int x, int y, int is_down)
         return 1;
     }
 
-    /* Row 4 */
     key_area_y += row_h + gap;
     if (y >= key_area_y && y < key_area_y + row_h) {
         int hide_w = 140;
@@ -290,6 +276,5 @@ int kb_handle_touch(int x, int y, int is_down)
         }
         return 1;
     }
-
     return 1;
 }

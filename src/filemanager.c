@@ -1,6 +1,6 @@
-/* src/filemanager.c */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include "filemanager.h"
@@ -10,7 +10,7 @@
 #include "hardware.h"
 #include "config.h"
 
-#define MAX_ENTRIES 128
+#define MAX_ENTRIES 1024
 
 struct file_entry {
     char name[128];
@@ -25,6 +25,16 @@ static char g_cur_path[512] = "/";
 static fm_mode_t g_mode = FM_MODE_BROWSE;
 static fm_pick_callback_t g_on_pick = NULL;
 
+static int compare_entries(const void *a, const void *b)
+{
+    const struct file_entry *ea = (const struct file_entry *)a;
+    const struct file_entry *eb = (const struct file_entry *)b;
+    if (ea->is_dir != eb->is_dir) {
+        return eb->is_dir - ea->is_dir; // Dirs first
+    }
+    return strcasecmp(ea->name, eb->name);
+}
+
 static void scan_directory(const char *path)
 {
     g_entry_count = 0;
@@ -33,9 +43,16 @@ static void scan_directory(const char *path)
     DIR *dir = opendir(path);
     if (!dir) return;
 
+    if (strcmp(path, "/") != 0) {
+        struct file_entry *e = &g_entries[g_entry_count++];
+        snprintf(e->name, sizeof(e->name), "..");
+        e->is_dir = 1;
+        e->size = 0;
+    }
+
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL && g_entry_count < MAX_ENTRIES) {
-        if (strcmp(ent->d_name, ".") == 0) continue;
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
 
         struct file_entry *e = &g_entries[g_entry_count++];
         snprintf(e->name, sizeof(e->name), "%s", ent->d_name);
@@ -53,6 +70,8 @@ static void scan_directory(const char *path)
         }
     }
     closedir(dir);
+
+    qsort(g_entries, g_entry_count, sizeof(struct file_entry), compare_entries);
 }
 
 void fm_init(fm_mode_t mode, const char *start_path, fm_pick_callback_t on_pick)
@@ -66,10 +85,6 @@ void fm_init(fm_mode_t mode, const char *start_path, fm_pick_callback_t on_pick)
 void fm_scroll_delta(float delta_y)
 {
     g_fm_scroll_y += delta_y;
-    if (g_fm_scroll_y < 0.0f) g_fm_scroll_y = 0.0f;
-    float max_scroll = (float)(g_entry_count * (BUTTON_HEIGHT + BUTTON_GAP) - 500);
-    if (max_scroll < 0.0f) max_scroll = 0.0f;
-    if (g_fm_scroll_y > max_scroll) g_fm_scroll_y = max_scroll;
 }
 
 void fm_render(void)
@@ -87,16 +102,26 @@ void fm_render(void)
     snprintf(path_buf, sizeof(path_buf), "Path: %s", g_cur_path);
     font_draw_text(UI_PADDING_X, NOTCH_OFFSET_Y + STATUS_BAR_HEIGHT + 66, path_buf, FONT_SIZE_SUBTITLE, COLOR_SUBTITLE_TXT);
 
+    float max_scroll = (float)(g_entry_count * (BUTTON_HEIGHT + BUTTON_GAP) - (g_fb.yres - topbar_h - NAV_BAR_HEIGHT));
+    if (max_scroll < 0.0f) max_scroll = 0.0f;
+
+    /* Elastic scroll physics */
+    if (g_fm_scroll_y < 0.0f) {
+        g_fm_scroll_y *= 0.75f;
+    } else if (g_fm_scroll_y > max_scroll) {
+        float overshoot = g_fm_scroll_y - max_scroll;
+        g_fm_scroll_y = max_scroll + overshoot * 0.75f;
+    }
+
     int start_y = topbar_h + 20 - (int)g_fm_scroll_y;
     int card_w = g_fb.xres - (UI_PADDING_X * 2);
     int bottom_bound = g_fb.yres - NAV_BAR_HEIGHT;
 
-    /* Viewport Scissor: Strictly clip between topbar and bottom navbar */
-    fb_set_clip(0, topbar_h, g_fb.xres, bottom_bound - topbar_h);
+    fb_set_clip(0, topbar_h + 4, g_fb.xres, bottom_bound - (topbar_h + 4));
 
     for (int i = 0; i < g_entry_count; i++) {
         int card_y = start_y + i * (BUTTON_HEIGHT + BUTTON_GAP);
-        if (card_y + BUTTON_HEIGHT < topbar_h || card_y > bottom_bound)
+        if (card_y + BUTTON_HEIGHT < topbar_h + 4 || card_y > bottom_bound)
             continue;
 
         struct file_entry *e = &g_entries[i];
@@ -136,13 +161,21 @@ void fm_handle_touch(int x, int y, int is_down)
 
     for (int i = 0; i < g_entry_count; i++) {
         int card_y = start_y + i * (BUTTON_HEIGHT + BUTTON_GAP);
-        if (card_y + BUTTON_HEIGHT < topbar_h || card_y > bottom_bound)
+        if (card_y + BUTTON_HEIGHT < topbar_h + 4 || card_y > bottom_bound)
             continue;
 
         if (x >= UI_PADDING_X && x <= UI_PADDING_X + card_w &&
             y >= card_y && y <= card_y + BUTTON_HEIGHT) {
             trigger_vibration();
             struct file_entry *e = &g_entries[i];
+
+            if (strcmp(e->name, "..") == 0) {
+                char *last = strrchr(g_cur_path, '/');
+                if (last && last != g_cur_path) *last = '\0';
+                else snprintf(g_cur_path, sizeof(g_cur_path), "/");
+                scan_directory(g_cur_path);
+                break;
+            }
 
             char target[1024];
             snprintf(target, sizeof(target), "%s/%s",

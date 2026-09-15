@@ -1,4 +1,3 @@
-/* src/mount.c */
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
@@ -21,7 +20,7 @@ struct part_info {
 
 static struct part_info g_parts[MAX_PARTS];
 static int g_part_count = 0;
-static int g_scroll_offset = 0;
+static float g_mount_scroll_y = 0.0f;
 
 static int is_path_mounted(const char *devpath, const char *mountpoint)
 {
@@ -110,16 +109,13 @@ static void scan_partitions(void)
 
 void mount_screen_init(void)
 {
-    g_scroll_offset = 0;
+    g_mount_scroll_y = 0.0f;
     scan_partitions();
 }
 
-void mount_screen_scroll(int direction)
+void mount_screen_scroll(float delta_y)
 {
-    g_scroll_offset += direction;
-    if (g_scroll_offset < 0) g_scroll_offset = 0;
-    if (g_scroll_offset > g_part_count - 5) g_scroll_offset = g_part_count - 5;
-    if (g_scroll_offset < 0) g_scroll_offset = 0;
+    g_mount_scroll_y += delta_y;
 }
 
 void mount_screen_render(void)
@@ -135,27 +131,27 @@ void mount_screen_render(void)
     font_draw_text(UI_PADDING_X, NOTCH_OFFSET_Y + STATUS_BAR_HEIGHT + 64,
                    "Dynamic Mount Subsystem // Tap to Toggle", FONT_SIZE_SUBTITLE, COLOR_SUBTITLE_TXT);
 
-    int start_y = topbar_h + 20;
+    float max_scroll = (float)(g_part_count * (BUTTON_HEIGHT + 14) - (g_fb.yres - topbar_h - NAV_BAR_HEIGHT));
+    if (max_scroll < 0.0f) max_scroll = 0.0f;
+    if (g_mount_scroll_y < 0.0f) g_mount_scroll_y *= 0.75f;
+    else if (g_mount_scroll_y > max_scroll) g_mount_scroll_y = max_scroll + (g_mount_scroll_y - max_scroll) * 0.75f;
+
+    int start_y = topbar_h + 20 - (int)g_mount_scroll_y;
     int card_w = g_fb.xres - (UI_PADDING_X * 2);
     int bottom_bound = g_fb.yres - NAV_BAR_HEIGHT;
-    int visible_rows = (bottom_bound - start_y) / (BUTTON_HEIGHT + 14);
-    if (visible_rows < 1) visible_rows = 1;
 
-    for (int i = 0; i < visible_rows; i++) {
-        int idx = g_scroll_offset + i;
-        if (idx >= g_part_count) break;
+    fb_set_clip(0, topbar_h + 4, g_fb.xres, bottom_bound - topbar_h - 4);
 
-        struct part_info *p = &g_parts[idx];
+    for (int i = 0; i < g_part_count; i++) {
         int card_y = start_y + i * (BUTTON_HEIGHT + 14);
+        if (card_y + BUTTON_HEIGHT < topbar_h || card_y > bottom_bound) continue;
 
+        struct part_info *p = &g_parts[i];
         fb_draw_card(UI_PADDING_X, card_y, card_w, BUTTON_HEIGHT, COLOR_CARD_BG, COLOR_CARD_BORDER);
 
         int check_color = p->is_mounted ? COLOR_CHECK_ON : COLOR_CHECK_OFF;
         fb_draw_card(UI_PADDING_X + 24, card_y + 36, 48, 48, COLOR_CANVAS, check_color);
-
-        if (p->is_mounted) {
-            font_draw_text(UI_PADDING_X + 38, card_y + 44, "X", FONT_SIZE_BODY, COLOR_CHECK_ON);
-        }
+        if (p->is_mounted) font_draw_text(UI_PADDING_X + 38, card_y + 44, "X", FONT_SIZE_BODY, COLOR_CHECK_ON);
 
         char title_buf[64];
         snprintf(title_buf, sizeof(title_buf), "%s", p->name);
@@ -167,6 +163,7 @@ void mount_screen_render(void)
         font_draw_text(UI_PADDING_X + 90, card_y + 68, sub_buf, FONT_SIZE_SUBTITLE,
                        p->is_mounted ? COLOR_CHECK_ON : COLOR_SUBTITLE_TXT);
     }
+    fb_clear_clip();
 }
 
 static void toggle_mount(struct part_info *p)
@@ -194,20 +191,18 @@ void mount_screen_handle_touch(int x, int y, int is_down)
     if (!is_down) return;
 
     int topbar_h = NOTCH_OFFSET_Y + STATUS_BAR_HEIGHT + 110;
-    int start_y = topbar_h + 20;
+    int start_y = topbar_h + 20 - (int)g_mount_scroll_y;
     int card_w = g_fb.xres - (UI_PADDING_X * 2);
     int bottom_bound = g_fb.yres - NAV_BAR_HEIGHT;
-    int visible_rows = (bottom_bound - start_y) / (BUTTON_HEIGHT + 14);
 
-    for (int i = 0; i < visible_rows; i++) {
-        int idx = g_scroll_offset + i;
-        if (idx >= g_part_count) break;
-
+    for (int i = 0; i < g_part_count; i++) {
         int card_y = start_y + i * (BUTTON_HEIGHT + 14);
+        if (card_y + BUTTON_HEIGHT < topbar_h || card_y > bottom_bound) continue;
+
         if (x >= UI_PADDING_X && x <= UI_PADDING_X + card_w &&
             y >= card_y && y <= card_y + BUTTON_HEIGHT) {
             trigger_vibration();
-            toggle_mount(&g_parts[idx]);
+            toggle_mount(&g_parts[i]);
             break;
         }
     }

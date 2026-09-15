@@ -1,4 +1,3 @@
-/* src/terminal.c */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -33,7 +32,6 @@ static void terminal_append_line(const char *line)
     }
 }
 
-/* Fallback built-in commands if no shell exists in early boot */
 static int handle_builtin(const char *cmd)
 {
     if (strcmp(cmd, "clear") == 0) {
@@ -44,36 +42,9 @@ static int handle_builtin(const char *cmd)
         terminal_append_line("Built-in CLI: ls, cat, uname, dmesg, clear, reboot");
         return 1;
     }
-    if (strcmp(cmd, "uname") == 0) {
-        terminal_append_line("Linux aarch64 bare-metal init v15.0");
-        return 1;
-    }
-    if (strncmp(cmd, "ls", 2) == 0) {
-        const char *path = cmd[2] == ' ' ? cmd + 3 : "/";
-        DIR *d = opendir(path);
-        if (!d) {
-            terminal_append_line("ls: cannot open directory");
-            return 1;
-        }
-        struct dirent *de;
-        char row[LINE_MAX_LEN] = "";
-        while ((de = readdir(d))) {
-            if (de->d_name[0] == '.') continue;
-            strncat(row, de->d_name, sizeof(row) - strlen(row) - 2);
-            strcat(row, "  ");
-            if (strlen(row) > 60) {
-                terminal_append_line(row);
-                row[0] = '\0';
-            }
-        }
-        if (strlen(row) > 0) terminal_append_line(row);
-        closedir(d);
-        return 1;
-    }
     return 0;
 }
 
-/* Robust process spawner targeting Android's sh and toybox */
 void terminal_execute_command(const char *cmd_line)
 {
     if (!cmd_line || strlen(cmd_line) == 0) return;
@@ -91,44 +62,25 @@ void terminal_execute_command(const char *cmd_line)
     }
 
     pid_t pid = fork();
-    if (pid < 0) {
-        terminal_append_line("Error: fork failed");
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return;
-    }
+    if (pid < 0) return;
 
     if (pid == 0) {
-        /* Child */
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
 
-        /* Set broad PATH including Android system and vendor paths */
         setenv("PATH", "/system/bin:/system/xbin:/vendor/bin:/bin:/sbin", 1);
         setenv("HOME", "/data", 0);
         setenv("TERM", "linux", 1);
 
-        /* Try shells in priority order */
-        const char *shells[] = {
-            "/system/bin/sh",
-            "/bin/sh",
-            "/system/bin/toybox",
-            "/vendor/bin/sh"
-        };
-
-        for (size_t i = 0; i < sizeof(shells)/sizeof(shells[0]); i++) {
-            execl(shells[i], "sh", "-c", cmd_line, (char *)NULL);
-        }
-
-        /* If command is an absolute path to binary */
+        execl("/system/bin/sh", "sh", "-c", cmd_line, (char *)NULL);
+        execl("/bin/sh", "sh", "-c", cmd_line, (char *)NULL);
         execl(cmd_line, cmd_line, (char *)NULL);
 
         _exit(127);
     }
 
-    /* Parent */
     close(pipefd[1]);
     FILE *stream = fdopen(pipefd[0], "r");
     if (stream) {
@@ -142,9 +94,7 @@ void terminal_execute_command(const char *cmd_line)
     } else {
         close(pipefd[0]);
     }
-
-    int status;
-    waitpid(pid, &status, 0);
+    waitpid(pid, NULL, 0);
 }
 
 static void on_kb_submit(const char *text)
@@ -155,7 +105,7 @@ static void on_kb_submit(const char *text)
 void terminal_init(void)
 {
     g_term_count = 0;
-    terminal_append_line("--- RECOVERY TERMINAL CONSOLE v15.0 ---");
+    terminal_append_line("--- RECOVERY TERMINAL CONSOLE v18.0 ---");
     terminal_append_line("Android environment-aware process engine");
     terminal_append_line("Tap [OPEN KEYBOARD] below to write commands");
 }
