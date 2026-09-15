@@ -81,7 +81,7 @@ void recents_scroll(float delta_y)
 {
     g_recents_scroll_y += delta_y;
     if (g_recents_scroll_y < 0.0f) g_recents_scroll_y = 0.0f;
-    float max_scroll = (float)(g_proc_count * (BUTTON_HEIGHT + BUTTON_GAP) - 600);
+    float max_scroll = (float)(g_proc_count * (BUTTON_HEIGHT + BUTTON_GAP) - 500);
     if (max_scroll < 0.0f) max_scroll = 0.0f;
     if (g_recents_scroll_y > max_scroll) g_recents_scroll_y = max_scroll;
 }
@@ -102,9 +102,12 @@ void recents_render(void)
     font_draw_text(UI_PADDING_X, NOTCH_OFFSET_Y + STATUS_BAR_HEIGHT + 66,
                    sub, FONT_SIZE_SUBTITLE, COLOR_SUBTITLE_TXT);
 
-    int start_y = topbar_h + 24 - (int)g_recents_scroll_y;
+    int start_y = topbar_h + 20 - (int)g_recents_scroll_y;
     int card_w = g_fb.xres - (UI_PADDING_X * 2);
     int bottom_bound = g_fb.yres - NAV_BAR_HEIGHT;
+
+    /* Viewport Scissor: Strictly clip between topbar and bottom navbar */
+    fb_set_clip(0, topbar_h, g_fb.xres, bottom_bound - topbar_h);
 
     for (int i = 0; i < g_proc_count; i++) {
         int card_y = start_y + i * (BUTTON_HEIGHT + BUTTON_GAP);
@@ -114,7 +117,6 @@ void recents_render(void)
         struct proc_card *p = &g_procs[i];
 
         fb_draw_card(UI_PADDING_X, card_y, card_w, BUTTON_HEIGHT, COLOR_CARD_BG, COLOR_CARD_BORDER);
-
         vector_draw_icon(UI_PADDING_X + 24, card_y + 36, 48, VEC_ICON_BINARY, COLOR_ACCENT_BLUE);
 
         char title[128];
@@ -126,12 +128,13 @@ void recents_render(void)
                  p->state, p->rss_pages * 4);
         font_draw_text(UI_PADDING_X + 90, card_y + 68, meta, FONT_SIZE_SUBTITLE, COLOR_SUBTITLE_TXT);
 
-        /* Kill Button */
         int btn_w = 120;
         int btn_x = UI_PADDING_X + card_w - btn_w - 20;
         fb_draw_card(btn_x, card_y + 28, btn_w, 64, COLOR_CARD_EXIT_BG, COLOR_CARD_EXIT_BORDER);
         font_draw_text(btn_x + 22, card_y + 46, "KILL", FONT_SIZE_SMALL, 0xFFFFFF);
     }
+
+    fb_clear_clip();
 }
 
 void recents_handle_touch(int x, int y, int is_down)
@@ -139,7 +142,7 @@ void recents_handle_touch(int x, int y, int is_down)
     if (!is_down) return;
 
     int topbar_h = NOTCH_OFFSET_Y + STATUS_BAR_HEIGHT + 110;
-    int start_y = topbar_h + 24 - (int)g_recents_scroll_y;
+    int start_y = topbar_h + 20 - (int)g_recents_scroll_y;
     int card_w = g_fb.xres - (UI_PADDING_X * 2);
     int bottom_bound = g_fb.yres - NAV_BAR_HEIGHT;
 

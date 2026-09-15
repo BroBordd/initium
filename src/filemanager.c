@@ -67,7 +67,7 @@ void fm_scroll_delta(float delta_y)
 {
     g_fm_scroll_y += delta_y;
     if (g_fm_scroll_y < 0.0f) g_fm_scroll_y = 0.0f;
-    float max_scroll = (float)(g_entry_count * (BUTTON_HEIGHT + BUTTON_GAP) - 600);
+    float max_scroll = (float)(g_entry_count * (BUTTON_HEIGHT + BUTTON_GAP) - 500);
     if (max_scroll < 0.0f) max_scroll = 0.0f;
     if (g_fm_scroll_y > max_scroll) g_fm_scroll_y = max_scroll;
 }
@@ -91,6 +91,9 @@ void fm_render(void)
     int card_w = g_fb.xres - (UI_PADDING_X * 2);
     int bottom_bound = g_fb.yres - NAV_BAR_HEIGHT;
 
+    /* Viewport Scissor: Strictly clip between topbar and bottom navbar */
+    fb_set_clip(0, topbar_h, g_fb.xres, bottom_bound - topbar_h);
+
     for (int i = 0; i < g_entry_count; i++) {
         int card_y = start_y + i * (BUTTON_HEIGHT + BUTTON_GAP);
         if (card_y + BUTTON_HEIGHT < topbar_h || card_y > bottom_bound)
@@ -101,7 +104,6 @@ void fm_render(void)
         unsigned int border = e->is_dir ? COLOR_TOPBAR_ACCENT : COLOR_CARD_BORDER;
         fb_draw_card(UI_PADDING_X, card_y, card_w, BUTTON_HEIGHT, COLOR_CARD_BG, border);
 
-        /* Vector Icon Rendering (Folders vs Binaries vs Documents) */
         if (e->is_dir) {
             vector_draw_icon(UI_PADDING_X + 24, card_y + 36, 48, VEC_ICON_FOLDER, COLOR_CHECK_ON);
         } else if (g_mode == FM_MODE_PICKER || strstr(e->name, ".sh") || strstr(e->name, ".bin")) {
@@ -119,6 +121,8 @@ void fm_render(void)
             snprintf(sub, sizeof(sub), "%lld bytes", e->size);
         font_draw_text(UI_PADDING_X + 90, card_y + 70, sub, FONT_SIZE_SUBTITLE, COLOR_SUBTITLE_TXT);
     }
+
+    fb_clear_clip();
 }
 
 void fm_handle_touch(int x, int y, int is_down)
