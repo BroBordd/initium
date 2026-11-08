@@ -1,16 +1,56 @@
+#include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <poll.h>
 #include <time.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/ioctl.h>
 #include <linux/input.h>
 #include "input.h"
 #include "ui.h"
 #include "hardware.h"
+#include "mount.h"
 #include "gpu.h"
 #include "config.h"
 #include "log.h"
+
+static volatile int g_flush_requested = 0;
+
+void input_request_flush(void) { g_flush_requested = 1; }
+
+static void drain_fd(int fd)
+{
+    struct input_event ev;
+    if (fd < 0) return;
+    while (read(fd, &ev, sizeof(ev)) == sizeof(ev)) { }
+}
+
+static int try_open_touchscreen(void)
+{
+    /* 1. Try defined touchscreen path */
+    int fd = open(EVENT_PATH_TOUCHSCREEN, O_RDONLY | O_NONBLOCK);
+    if (fd >= 0) return fd;
+
+    /* 2. Auto-detect any input device exposing ABS_MT_POSITION_X or ABS_X */
+    for (int i = 0; i <= 7; i++) {
+        char devpath[64];
+        snprintf(devpath, sizeof(devpath), "/dev/input/event%d", i);
+        int test_fd = open(devpath, O_RDONLY | O_NONBLOCK);
+        if (test_fd >= 0) {
+            unsigned char abs_bits[(ABS_MAX + 7) / 8] = {0};
+            if (ioctl(test_fd, EVIOCGBIT(EV_ABS, sizeof(abs_bits)), abs_bits) >= 0) {
+                if ((abs_bits[ABS_MT_POSITION_X / 8] & (1 << (ABS_MT_POSITION_X % 8))) ||
+                    (abs_bits[ABS_X / 8] & (1 << (ABS_X % 8)))) {
+                    dbgf(LOGPFX "auto-detected touchscreen on %s\n", devpath);
+                    return test_fd;
+                }
+            }
+            close(test_fd);
+        }
+    }
+    return -1;
+}
 
 void input_loop(void)
 {
@@ -32,19 +72,21 @@ void input_loop(void)
 
     struct timespec last_wd_kick;
     clock_gettime(CLOCK_MONOTONIC, &last_wd_kick);
-    
+
     struct timespec last_scan;
     last_scan = last_wd_kick;
 
-    /* Absolute frame schedule for real 60 FPS pacing (see poll() call
-     * below). Starts "due" immediately so the first frame doesn't wait. */
     struct timespec next_frame = last_wd_kick;
 
-    dbgf(LOGPFX "input loop active (60 FPS + Dynamic Hotplug)\n");
+    /* Immediate open on startup without waiting 1s */
+    handle_firmware_requests();
+    setup_input_devnodes();
+    fd_gpio = open(EVENT_PATH_GPIO_KEYS, O_RDONLY | O_NONBLOCK);
+    fd_power = open(EVENT_PATH_POWER_KEY, O_RDONLY | O_NONBLOCK);
+    fd_touch = try_open_touchscreen();
 
-    /* Perf instrumentation: split total loop-iteration time into
-     * poll+input-handling vs ui_render() (which includes fb_present).
-     * Logged periodically via dbgf/dmesg. Remove once bottleneck found. */
+    dbgf(LOGPFX "input loop active (60 FPS + Fast Probing)\n");
+
     unsigned long g_loop_input_ns_accum = 0;
     unsigned long g_loop_render_ns_accum = 0;
     unsigned long g_loop_samples = 0;
@@ -55,45 +97,50 @@ void input_loop(void)
         clock_gettime(CLOCK_MONOTONIC, &t_start);
         ta = t_start;
 
-        /* Dynamic input scan (fix for 22s initial delay or late probing) */
+        /* Re-probe or service pending firmware every second if any descriptor is missing */
         if (t_start.tv_sec - last_scan.tv_sec >= 1) {
-            if (fd_gpio < 0) fd_gpio = open(EVENT_PATH_GPIO_KEYS, O_RDONLY | O_NONBLOCK);
+            if (fd_touch < 0) {
+                handle_firmware_requests();
+                setup_input_devnodes();
+                fd_touch = try_open_touchscreen();
+            }
+            if (fd_gpio < 0)  fd_gpio = open(EVENT_PATH_GPIO_KEYS, O_RDONLY | O_NONBLOCK);
             if (fd_power < 0) fd_power = open(EVENT_PATH_POWER_KEY, O_RDONLY | O_NONBLOCK);
-            if (fd_touch < 0) fd_touch = open(EVENT_PATH_TOUCHSCREEN, O_RDONLY | O_NONBLOCK);
 
-            num_pfds = 0;
-            idx_gpio = idx_power = idx_touch = -1;
-            if (fd_gpio >= 0) {
-                idx_gpio = num_pfds;
-                pfds[num_pfds].fd = fd_gpio;
-                pfds[num_pfds].events = POLLIN;
-                num_pfds++;
-            }
-            if (fd_power >= 0) {
-                idx_power = num_pfds;
-                pfds[num_pfds].fd = fd_power;
-                pfds[num_pfds].events = POLLIN;
-                num_pfds++;
-            }
-            if (fd_touch >= 0) {
-                idx_touch = num_pfds;
-                pfds[num_pfds].fd = fd_touch;
-                pfds[num_pfds].events = POLLIN;
-                num_pfds++;
-            }
             last_scan = t_start;
         }
 
-        /* Frame pacing: block only for whatever's left of THIS frame's
-         * budget (FRAME_TIME_NS), not a flat 16ms on top of however long
-         * the previous render took. The old code waited a fixed 16ms here
-         * regardless of render cost, so the real loop period was
-         * (16ms + render time) every frame -- e.g. ~33ms/~30fps for the
-         * heavier 3D bench render. It only ever hit ~60fps by accident
-         * while touching, because poll() returns immediately once the
-         * touch fd has pending data, incidentally cancelling the wasted
-         * wait. Scheduling against an absolute next-frame time fixes that
-         * for every view, touch or not. */
+        if (g_flush_requested) {
+            drain_fd(fd_gpio);
+            drain_fd(fd_power);
+            drain_fd(fd_touch);
+            touch_down = 0;
+            slop_exceeded = 0;
+            velocity_y = 0.0f;
+            g_flush_requested = 0;
+        }
+
+        num_pfds = 0;
+        idx_gpio = idx_power = idx_touch = -1;
+        if (fd_gpio >= 0) {
+            idx_gpio = num_pfds;
+            pfds[num_pfds].fd = fd_gpio;
+            pfds[num_pfds].events = POLLIN;
+            num_pfds++;
+        }
+        if (fd_power >= 0) {
+            idx_power = num_pfds;
+            pfds[num_pfds].fd = fd_power;
+            pfds[num_pfds].events = POLLIN;
+            num_pfds++;
+        }
+        if (fd_touch >= 0) {
+            idx_touch = num_pfds;
+            pfds[num_pfds].fd = fd_touch;
+            pfds[num_pfds].events = POLLIN;
+            num_pfds++;
+        }
+
         long remain_ns = (next_frame.tv_sec - t_start.tv_sec) * 1000000000L +
                           (next_frame.tv_nsec - t_start.tv_nsec);
         int timeout_ms = (int)(remain_ns / 1000000L);
@@ -204,10 +251,6 @@ void input_loop(void)
             last_wd_kick = now;
         }
 
-        /* Advance the frame schedule by exactly one budget-slice. If a
-         * frame ran long and we're already past the next slot, resync to
-         * "now" instead of firing off several back-to-back catch-up
-         * frames -- we want a steady 60fps, not a burst after a hitch. */
         next_frame.tv_nsec += FRAME_TIME_NS;
         while (next_frame.tv_nsec >= 1000000000L) {
             next_frame.tv_nsec -= 1000000000L;

@@ -1,13 +1,19 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <dirent.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <errno.h>
 #include "mount.h"
 #include "framebuffer.h"
 #include "font.h"
 #include "hardware.h"
 #include "config.h"
+#include "log.h"
 
 #define MAX_PARTS 48
 
@@ -54,9 +60,9 @@ static void add_partition(const char *name, const char *devpath)
     snprintf(p->name, sizeof(p->name), "%s", name);
     snprintf(p->devpath, sizeof(p->devpath), "%s", devpath);
 
-    if (strcmp(name, "system") == 0)
+    if (strcmp(name, "system") == 0 || strcmp(name, "system_a") == 0 || strcmp(name, "system_b") == 0)
         snprintf(p->mountpoint, sizeof(p->mountpoint), "/system");
-    else if (strcmp(name, "vendor") == 0)
+    else if (strcmp(name, "vendor") == 0 || strcmp(name, "vendor_a") == 0 || strcmp(name, "vendor_b") == 0)
         snprintf(p->mountpoint, sizeof(p->mountpoint), "/vendor");
     else if (strcmp(name, "userdata") == 0 || strcmp(name, "data") == 0)
         snprintf(p->mountpoint, sizeof(p->mountpoint), "/data");
@@ -70,6 +76,78 @@ static void scan_partitions(void)
 {
     g_part_count = 0;
 
+    mkdir("/dev/block", 0755);
+    mkdir("/dev/block/by-name", 0755);
+
+    /* 1. Primary method: scan /sys/class/block to discover GPT partition names (PARTNAME) */
+    DIR *blkdir = opendir("/sys/class/block");
+    if (blkdir) {
+        struct dirent *ent;
+        while ((ent = readdir(blkdir)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+            if (strncmp(ent->d_name, "loop", 4) == 0 || strncmp(ent->d_name, "ram", 3) == 0) continue;
+
+            char uevent_path[256];
+            snprintf(uevent_path, sizeof(uevent_path), "/sys/class/block/%s/uevent", ent->d_name);
+
+            FILE *ufp = fopen(uevent_path, "r");
+            if (!ufp) continue;
+
+            int major = -1, minor = -1;
+            char partname[64] = "";
+            char devname[64] = "";
+            char line[128];
+
+            while (fgets(line, sizeof(line), ufp)) {
+                size_t len = strlen(line);
+                if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+
+                if (strncmp(line, "MAJOR=", 6) == 0) major = atoi(line + 6);
+                else if (strncmp(line, "MINOR=", 6) == 0) minor = atoi(line + 6);
+                else if (strncmp(line, "PARTNAME=", 9) == 0) snprintf(partname, sizeof(partname), "%s", line + 9);
+                else if (strncmp(line, "DEVNAME=", 8) == 0) snprintf(devname, sizeof(devname), "%s", line + 8);
+            }
+            fclose(ufp);
+
+            if (devname[0] == '\0') snprintf(devname, sizeof(devname), "%s", ent->d_name);
+
+            if (major >= 0 && minor >= 0) {
+                char node_path[128];
+                snprintf(node_path, sizeof(node_path), "/dev/block/%s", devname);
+                mknod(node_path, S_IFBLK | 0660, makedev((unsigned)major, (unsigned)minor));
+
+                if (partname[0] != '\0') {
+                    char byname_path[128];
+                    snprintf(byname_path, sizeof(byname_path), "/dev/block/by-name/%s", partname);
+                    unlink(byname_path);
+                    symlink(node_path, byname_path);
+
+                    add_partition(partname, byname_path);
+
+                    /* Provide non-slot alias for slot-based A/B partitions */
+                    if (strcmp(partname, "vendor_a") == 0 || strcmp(partname, "vendor_b") == 0) {
+                        char alias[128];
+                        snprintf(alias, sizeof(alias), "/dev/block/by-name/vendor");
+                        unlink(alias);
+                        symlink(node_path, alias);
+                        add_partition("vendor", alias);
+                    }
+                    if (strcmp(partname, "system_a") == 0 || strcmp(partname, "system_b") == 0) {
+                        char alias[128];
+                        snprintf(alias, sizeof(alias), "/dev/block/by-name/system");
+                        unlink(alias);
+                        symlink(node_path, alias);
+                        add_partition("system", alias);
+                    }
+                } else {
+                    add_partition(devname, node_path);
+                }
+            }
+        }
+        closedir(blkdir);
+    }
+
+    /* 2. Traditional by-name / mapper scan */
     const char *dirs[] = {
         "/dev/block/by-name",
         "/dev/block/bootdevice/by-name",
@@ -90,6 +168,7 @@ static void scan_partitions(void)
         closedir(dir);
     }
 
+    /* 3. Fallback scan /proc/partitions */
     FILE *fp = fopen("/proc/partitions", "r");
     if (fp) {
         char line[128];
@@ -100,11 +179,149 @@ static void scan_partitions(void)
             if (sscanf(line, "%d %d %lld %63s", &major, &minor, &blocks, partname) == 4) {
                 char devpath[128];
                 snprintf(devpath, sizeof(devpath), "/dev/block/%s", partname);
+                mknod(devpath, S_IFBLK | 0660, makedev((unsigned)major, (unsigned)minor));
                 add_partition(partname, devpath);
             }
         }
         fclose(fp);
     }
+}
+
+static void toggle_mount(struct part_info *p)
+{
+    if (p->is_mounted) {
+        if (umount2(p->mountpoint, MNT_DETACH) == 0 || umount(p->mountpoint) == 0) {
+            p->is_mounted = 0;
+        }
+    } else {
+        mkdir("/mnt", 0755);
+        mkdir(p->mountpoint, 0755);
+
+        const char *fs_types[] = {"ext4", "erofs", "f2fs", "vfat"};
+        int is_ro = (strcmp(p->mountpoint, "/system") == 0 || strcmp(p->mountpoint, "/vendor") == 0);
+        unsigned long flags = MS_NOATIME | (is_ro ? MS_RDONLY : 0);
+
+        for (size_t i = 0; i < sizeof(fs_types)/sizeof(fs_types[0]); i++) {
+            if (mount(p->devpath, p->mountpoint, fs_types[i], flags, NULL) == 0) {
+                p->is_mounted = 1;
+                break;
+            }
+            if (!(flags & MS_RDONLY) &&
+                mount(p->devpath, p->mountpoint, fs_types[i], flags | MS_RDONLY, NULL) == 0) {
+                p->is_mounted = 1;
+                break;
+            }
+        }
+    }
+}
+
+void handle_firmware_requests(void)
+{
+    DIR *dir = opendir("/sys/class/firmware");
+    if (!dir) return;
+
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        if (strcmp(ent->d_name, "timeout") == 0) continue;
+
+        char fw_name[128];
+        snprintf(fw_name, sizeof(fw_name), "%s", ent->d_name);
+
+        char loading_path[256], data_path[256];
+        snprintf(loading_path, sizeof(loading_path), "/sys/class/firmware/%s/loading", fw_name);
+        snprintf(data_path, sizeof(data_path), "/sys/class/firmware/%s/data", fw_name);
+
+        const char *fw_dirs[] = {
+            "/vendor/firmware",
+            "/vendor/firmware_mnt/image",
+            "/system/etc/firmware",
+            "/etc/firmware",
+            "/firmware/image"
+        };
+
+        char file_path[512];
+        int fw_src_fd = -1;
+        for (size_t i = 0; i < sizeof(fw_dirs)/sizeof(fw_dirs[0]); i++) {
+            snprintf(file_path, sizeof(file_path), "%s/%s", fw_dirs[i], fw_name);
+            fw_src_fd = open(file_path, O_RDONLY);
+            if (fw_src_fd >= 0) break;
+        }
+
+        int lfd = open(loading_path, O_WRONLY);
+        if (lfd < 0) {
+            if (fw_src_fd >= 0) close(fw_src_fd);
+            continue;
+        }
+
+        if (fw_src_fd >= 0) {
+            write(lfd, "1\n", 2);
+            int dfd = open(data_path, O_WRONLY);
+            if (dfd >= 0) {
+                char buf[4096];
+                ssize_t nr;
+                while ((nr = read(fw_src_fd, buf, sizeof(buf))) > 0) {
+                    write(dfd, buf, (size_t)nr);
+                }
+                close(dfd);
+                write(lfd, "0\n", 2);
+                dbgf(LOGPFX "firmware: successfully loaded %s from %s\n", fw_name, file_path);
+            } else {
+                write(lfd, "-1\n", 3);
+            }
+            close(fw_src_fd);
+        } else {
+            /* Firmware not found: abort sysfs wait immediately instead of blocking driver probe */
+            write(lfd, "-1\n", 3);
+            dbgf(LOGPFX "firmware: %s not found, aborted sysfs wait\n", fw_name);
+        }
+        close(lfd);
+    }
+    closedir(dir);
+}
+
+void mount_critical_early(void)
+{
+    /* 1. Cap firmware timeout to 1 second so probe requests never block the kernel */
+    int to_fd = open("/sys/class/firmware/timeout", O_WRONLY);
+    if (to_fd >= 0) {
+        write(to_fd, "1\n", 2);
+        close(to_fd);
+        dbgf(LOGPFX "sysfs firmware timeout configured to 1s\n");
+    }
+
+    /* 2. Populate block device nodes from sysfs and mount /vendor */
+    scan_partitions();
+    for (int i = 0; i < g_part_count; i++) {
+        if ((strcmp(g_parts[i].name, "vendor") == 0 ||
+             strcmp(g_parts[i].name, "vendor_a") == 0 ||
+             strcmp(g_parts[i].name, "vendor_b") == 0) && !g_parts[i].is_mounted) {
+            toggle_mount(&g_parts[i]);
+            if (g_parts[i].is_mounted) {
+                dbgf(LOGPFX "early mounted %s on %s (%s)\n", g_parts[i].name, g_parts[i].mountpoint, g_parts[i].devpath);
+                break;
+            }
+        }
+    }
+
+    /* 3. Tell the kernel to search /vendor/firmware directly for request_firmware() */
+    int fw_fd = open("/sys/module/firmware_class/parameters/path", O_WRONLY);
+    if (fw_fd >= 0) {
+        write(fw_fd, "/vendor/firmware", strlen("/vendor/firmware"));
+        close(fw_fd);
+        dbgf(LOGPFX "configured firmware_class.path to /vendor/firmware\n");
+    }
+
+    /* 4. Provide standard filesystem symlinks */
+    mkdir("/lib", 0755);
+    mkdir("/etc", 0755);
+    unlink("/lib/firmware");
+    unlink("/etc/firmware");
+    symlink("/vendor/firmware", "/lib/firmware");
+    symlink("/vendor/firmware", "/etc/firmware");
+
+    /* 5. Fulfill or abort any already-pending sysfs firmware requests */
+    handle_firmware_requests();
 }
 
 void mount_screen_init(void)
@@ -164,26 +381,6 @@ void mount_screen_render(void)
                        p->is_mounted ? COLOR_CHECK_ON : COLOR_SUBTITLE_TXT);
     }
     fb_clear_clip();
-}
-
-static void toggle_mount(struct part_info *p)
-{
-    if (p->is_mounted) {
-        if (umount2(p->mountpoint, MNT_DETACH) == 0 || umount(p->mountpoint) == 0) {
-            p->is_mounted = 0;
-        }
-    } else {
-        mkdir("/mnt", 0755);
-        mkdir(p->mountpoint, 0755);
-
-        const char *fs_types[] = {"ext4", "f2fs", "erofs", "vfat"};
-        for (size_t i = 0; i < sizeof(fs_types)/sizeof(fs_types[0]); i++) {
-            if (mount(p->devpath, p->mountpoint, fs_types[i], MS_NOATIME, NULL) == 0) {
-                p->is_mounted = 1;
-                break;
-            }
-        }
-    }
 }
 
 void mount_screen_handle_touch(int x, int y, int is_down)

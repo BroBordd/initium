@@ -11,6 +11,7 @@
 #include "recents.h"
 #include "bench3d.h"
 #include "power.h"
+#include "linux.h"
 #include "keyboard.h"
 #include "framebuffer.h"
 #include "font.h"
@@ -56,10 +57,11 @@ static const struct app_shortcut PAGE0_APPS[6] = {
     {"Sensors",  VEC_ICON_SENSOR,   0x06B6D4, VIEW_SYSMON,      0}
 };
 
-static const struct app_shortcut PAGE1_APPS[3] = {
+static const struct app_shortcut PAGE1_APPS[4] = {
     {"Processes",VEC_ICON_PROCESSES,0x6366F1, VIEW_PROCESSES,   0},
     {"Power",    VEC_ICON_POWER,    0xEF4444, VIEW_POWER,       0},
-    {"Recents",  VEC_ICON_RECENTS,  0x38BDF8, VIEW_RECENTS,     0}
+    {"Recents",  VEC_ICON_RECENTS,  0x38BDF8, VIEW_RECENTS,     0},
+    {"Linux",    VEC_ICON_TERMINAL, 0xF97316, VIEW_HOMESCREEN,  2}
 };
 
 int ui_is_exit_requested(void) { return g_exit_requested; }
@@ -195,7 +197,7 @@ static void render_homescreen(void) {
     }
 
     int p1_x_offset = g_fb.xres - (int)g_page_scroll_x;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         int col = i % GRID_COLS;
         int row = i / GRID_COLS;
         render_app_tile(p1_x_offset + (col * col_width) + (col_width / 2), top_margin + (row * row_height), &PAGE1_APPS[i]);
@@ -361,7 +363,7 @@ void ui_handle_tap(int x, int y) {
         int top_margin = NOTCH_OFFSET_Y + STATUS_BAR_HEIGHT + 60;
         int col_width = g_fb.xres / GRID_COLS;
         int row_height = 180;
-        int count = (g_cur_page == 0) ? 6 : 3;
+        int count = (g_cur_page == 0) ? 6 : 4;
         const struct app_shortcut *apps = (g_cur_page == 0) ? PAGE0_APPS : PAGE1_APPS;
 
         for (int i = 0; i < count; i++) {
@@ -374,7 +376,11 @@ void ui_handle_tap(int x, int y) {
             if (x >= cx - (hit_box/2) && x <= cx + (hit_box/2) &&
                 y >= cy - 10 && y <= cy + hit_box + 20) {
                 trigger_vibration();
-                if (apps[i].is_action == 1) {
+                if (apps[i].is_action == 2) {
+                    char lmsg[160];
+                    if (linux_session_run(lmsg, sizeof(lmsg)) != 0)
+                        ui_show_alert("Linux", lmsg);
+                } else if (apps[i].is_action == 1) {
                     fm_init(FM_MODE_PICKER, "/system/bin", on_executable_picked);
                     g_active_view = VIEW_FILEMANAGER;
                 } else {

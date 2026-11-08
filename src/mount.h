@@ -1,6 +1,8 @@
 #ifndef MOUNT_H
 #define MOUNT_H
 
+void mount_critical_early(void);
+void handle_firmware_requests(void);
 void mount_screen_init(void);
 void mount_screen_render(void);
 void mount_screen_handle_touch(int x, int y, int is_down);

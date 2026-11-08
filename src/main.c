@@ -8,6 +8,7 @@
 #include "vector.h"
 #include "ui.h"
 #include "input.h"
+#include "mount.h"
 
 int main(void)
 {
@@ -18,6 +19,10 @@ int main(void)
     init_power_and_signals();
     init_watchdog();
     kick_watchdog();
+
+    /* Mount /vendor, configure firmware_class parameters and timeout to 1s
+     * before any driver probe requests can stall */
+    mount_critical_early();
 
     /* Create framebuffer and input nodes */
     if (!mknod_fb0())
